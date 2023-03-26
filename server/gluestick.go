@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -63,39 +64,13 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	results := make(map[string]interface{})
 
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Scraping", r.URL.String())
+		log.Println("Scraping", r.URL.String())
 	})
 
 	for itemName, item := range scrapeReq.Items {
 		c.OnHTML(item.Selector, func(e *colly.HTMLElement) {
-			outItem := make(map[string]interface{})
-			for fieldName, field := range item.Fields {
-
-				if fieldSelector, ok := field.(string); ok {
-					sel, attr := getSelectorAndAttr(fieldSelector)
-					if len(sel) == 0 {
-						if len(attr) == 0 { // Use text
-							accumValue(outItem, fieldName, e.Text)
-						} else { // Use attr
-							accumValue(outItem, fieldName, e.Attr(attr))
-						}
-					} else {
-						if len(attr) == 0 {
-							accumValue(outItem, fieldName, e.ChildText(sel))
-						} else {
-							for _, val := range e.ChildAttrs(sel, attr) {
-								accumValue(outItem, fieldName, val)
-							}
-						}
-					}
-				} else {
-					// TODO: nested/recursive parsing here--break up into helper func.
-					// TODO: call accumValue with the final result... or accum as recursing
-					fmt.Println("TODO: nested parsing for field: ", fieldName)
-				}
-
-			}
-			accumValue(results, itemName, outItem)
+			parsed := parseFields(item.Fields, e)
+			accumValue(results, itemName, parsed)
 		})
 
 	}
@@ -103,7 +78,7 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	c.OnScraped(func(r *colly.Response) {
-		fmt.Println("Finished", r.Request.URL)
+		log.Println("Finished", r.Request.URL)
 		wg.Done()
 	})
 
@@ -117,6 +92,36 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string]interface{} {
+	parsed := make(map[string]interface{})
+	for fieldName, field := range fields {
+		if fieldSelector, ok := field.(string); ok {
+			sel, attr := getSelectorAndAttr(fieldSelector)
+			if len(sel) == 0 {
+				if len(attr) == 0 { // Use text
+					accumValue(parsed, fieldName, e.Text)
+				} else { // Use attr
+					accumValue(parsed, fieldName, e.Attr(attr))
+				}
+			} else {
+				if len(attr) == 0 {
+					accumValue(parsed, fieldName, e.ChildText(sel))
+				} else {
+					for _, val := range e.ChildAttrs(sel, attr) {
+						accumValue(parsed, fieldName, val)
+					}
+				}
+			}
+		} else if nestedFields, ok := field.(map[string]interface{}); ok {
+			val := parseFields(nestedFields, e)
+			accumValue(parsed, fieldName, val)
+		} else {
+			log.Printf("ERROR: expected string or map[string]interface{}, got: %s\n", reflect.TypeOf(field))
+		}
+	}
+	return parsed
 }
 
 // Store single/multi values to map.  On first set, single value.
@@ -141,7 +146,6 @@ func getSelectorAndAttr(input string) (string, string) {
 	idx := strings.LastIndex(input, "|")
 	if idx == -1 {
 		// selector only--no "|attr" specified
-		fmt.Println("returnign just selector: ", input)
 		return input, ""
 	}
 	// TODO: handle trailing | ?
