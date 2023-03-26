@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/gocolly/colly"
@@ -21,9 +22,11 @@ type ScrapeRequest struct {
 
 type ScrapeItem struct {
 	Selector string `json:"selector"`
-	// TODO: udpate to map to interface, which is either a string
-	// TODO: ... or a map of string to iface again with nested objs...
-	Fields map[string]string `json:"fields"`
+	// Fields can be a single name->valueSelector, or nested name->{n1->s1, n2->s2, etc }}
+	// The field's valueSelectors can be a selector in which case the ChildText()
+	// is called. Or "selector|attr" to specify which ChildAttrs() is used.
+	// OR simple "|attr" to get Attr() directly on parent selected element.
+	Fields map[string]interface{} `json:"fields"`
 }
 
 func main() {
@@ -57,30 +60,42 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := colly.NewCollector()
-	results := make(map[string][]interface{})
+	results := make(map[string]interface{})
 
-	// Before making a request print "Visiting ..."
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting", r.URL.String())
+		fmt.Println("Scraping", r.URL.String())
 	})
 
-	for iName, iVal := range scrapeReq.Items {
-		c.OnHTML(iVal.Selector, func(e *colly.HTMLElement) {
-			outItem := make(map[string][]interface{})
-			for fName, _ := range iVal.Fields {
-				// TODO: eventually support that fVal may itself be nested...
-				// TODO: starting with e, select/extract value for each fiedl (fName)
-				addValue(outItem, fName, "todo-value-for"+fName)
-			}
+	for itemName, item := range scrapeReq.Items {
+		c.OnHTML(item.Selector, func(e *colly.HTMLElement) {
+			outItem := make(map[string]interface{})
+			for fieldName, field := range item.Fields {
 
-			// TODO: get all field key-values
-			// TODO: update to array of results not just last result...
-			// TODO: support first/last/multi values?
-			link := e.Attr("href")
-			// Print link
-			fmt.Printf("Link found: %q -> %s\n", e.Text, link)
-			// TODO: make this an array of values:
-			addValue(results, iName, outItem)
+				if fieldSelector, ok := field.(string); ok {
+					sel, attr := getSelectorAndAttr(fieldSelector)
+					if len(sel) == 0 {
+						if len(attr) == 0 { // Use text
+							accumValue(outItem, fieldName, e.Text)
+						} else { // Use attr
+							accumValue(outItem, fieldName, e.Attr(attr))
+						}
+					} else {
+						if len(attr) == 0 {
+							accumValue(outItem, fieldName, e.ChildText(sel))
+						} else {
+							for _, val := range e.ChildAttrs(sel, attr) {
+								accumValue(outItem, fieldName, val)
+							}
+						}
+					}
+				} else {
+					// TODO: nested/recursive parsing here--break up into helper func.
+					// TODO: call accumValue with the final result... or accum as recursing
+					fmt.Println("TODO: nested parsing for field: ", fieldName)
+				}
+
+			}
+			accumValue(results, itemName, outItem)
 		})
 
 	}
@@ -104,12 +119,34 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func addValue(outMap map[string][]interface{}, key string, value interface{}) {
+// Store single/multi values to map.  On first set, single value.
+// On subsequent set's, upgrade value to a slice and append.
+// This allows easy value accumulation without having to specify up front
+// if we're wanting a single or multi value.
+func accumValue(outMap map[string]interface{}, key string, value interface{}) {
 	if prev, found := outMap[key]; found {
-		outMap[key] = append(prev, value)
+		if multi, ok := prev.([]interface{}); ok {
+			// already a slice, append
+			outMap[key] = append(multi, value)
+		} else {
+			// prev was single value, convert to slice and add new val
+			outMap[key] = []interface{}{prev, value}
+		}
 	} else {
-		outMap[key] = []interface{}{value}
+		outMap[key] = value
 	}
+}
+
+func getSelectorAndAttr(input string) (string, string) {
+	idx := strings.LastIndex(input, "|")
+	if idx == -1 {
+		// selector only--no "|attr" specified
+		fmt.Println("returnign just selector: ", input)
+		return input, ""
+	}
+	// TODO: handle trailing | ?
+	// TODO: handle when both are blank? or calling code already has a meaning for this
+	return input[:idx], input[idx+1:]
 }
 
 func validate(s *ScrapeRequest) error {
@@ -129,12 +166,15 @@ func validate(s *ScrapeRequest) error {
 		if len(itemV.Fields) == 0 {
 			return fmt.Errorf("request.items[%q].fields was empty", itemK)
 		}
-		for fieldK, fieldV := range itemV.Fields {
-			if len(fieldK) == 0 || len(fieldV) == 0 {
-				return fmt.Errorf("Empty request.items[%q].field key: %q, value: %q",
-					itemK, fieldK, fieldV)
-			}
-		}
+		// // TODO: recursively validate that all leafs are nonempty?
+		// // TODO: or not worth it as would still have to validate they're
+		// // valid selectors...
+		// for fieldK, fieldV := range itemV.Fields {
+		// 	if len(fieldK) == 0 || len(fieldV) == 0 {
+		// 		return fmt.Errorf("Empty request.items[%q].field key: %q, value: %q",
+		// 			itemK, fieldK, fieldV)
+		// 	}
+		// }
 	}
 	return nil
 }
