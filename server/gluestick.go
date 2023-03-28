@@ -170,15 +170,9 @@ func validate(s *ScrapeRequest) error {
 		if len(itemV.Fields) == 0 {
 			return fmt.Errorf("request.items[%q].fields was empty", itemK)
 		}
-		// // TODO: recursively validate that all leafs are nonempty?
-		// // TODO: or not worth it as would still have to validate they're
-		// // valid selectors...
-		// for fieldK, fieldV := range itemV.Fields {
-		// 	if len(fieldK) == 0 || len(fieldV) == 0 {
-		// 		return fmt.Errorf("Empty request.items[%q].field key: %q, value: %q",
-		// 			itemK, fieldK, fieldV)
-		// 	}
-		// }
+		// TODO: recursively validate all field leafs?
+		// NOTE: can have an empty value (no selector|attribute) in which case
+		// the parent's full text is used.
 	}
 	return nil
 }
