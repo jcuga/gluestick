@@ -62,13 +62,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to parse input as json request, error: %s\n", err)
 		os.Exit(1)
 	}
-
 	if err := validate(&scrapeReq); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid scrape request: %s\n", err)
 		os.Exit(1)
 	}
 
-	// TODO: refactor to return obj and error then print out obj as json if non err
 	results, err := scrape(scrapeReq, *doVerbose)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error while scraping: %s\n", err)

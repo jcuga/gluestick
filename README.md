@@ -1,5 +1,5 @@
 # gluestick
-gluing the web together on one page
+gluing the web together
 
 
 ## Build
