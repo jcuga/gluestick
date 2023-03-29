@@ -51,10 +51,6 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: remove once done initial testing:
-	// j, _ := json.MarshalIndent(scrapeReq, "", "    ")
-	// fmt.Fprintf(w, "TODO: do it: %v, json: %s", scrapeReq, string(j))
-
 	if err := validate(&scrapeReq); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -79,6 +75,10 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	wg.Add(1)
 	c.OnScraped(func(r *colly.Response) {
 		log.Println("Finished", r.Request.URL)
+		wg.Done()
+	})
+	c.OnError(func(_ *colly.Response, err error) {
+		log.Println("Something went wrong:", err)
 		wg.Done()
 	})
 

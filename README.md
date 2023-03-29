@@ -4,11 +4,14 @@ gluing the web together on one page
 
 ## Build
 ```
-cd ./server/
 go fmt ./... && go vet ./... && go build gluestick.go
 ```
 
 Then run via `./gluestick`
+
+## Usage
+
+# TODO: update README with cmdline usage, replaces below server hosted stuff:
 
 
 ## Sample Scrape Requests

@@ -1,4 +1,4 @@
-module github.com/jcuga/gluestick/server
+module github.com/jcuga/gluestick
 
 go 1.15
 
