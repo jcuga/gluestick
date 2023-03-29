@@ -5,10 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -30,40 +30,71 @@ type ScrapeItem struct {
 	Fields map[string]interface{} `json:"fields"`
 }
 
-func main() {
-	serveAddr := flag.String("serve", "127.0.0.1:6100", "Address:Port to serve http.")
-	flag.Parse()
-	http.HandleFunc("/scrape", scrape)
-	log.Printf("Serving http on: %s", *serveAddr)
-	http.ListenAndServe(*serveAddr, nil)
-}
+type ScrapeResult map[string]interface{}
 
-func scrape(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed.", http.StatusMethodNotAllowed)
-		return
+func main() {
+	inFilename := flag.String("f", "", "Input json filename.")
+	inString := flag.String("in", "", "Input json directly.")
+	doVerbose := flag.Bool("v", false, "Verbose output.")
+	flag.Parse()
+
+	var inputJson []byte
+	if len(*inString) > 0 {
+		inputJson = []byte(*inString)
+	} else if len(*inFilename) > 0 {
+		inBytes, err := ioutil.ReadFile(*inFilename)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open input file: %q, error: %s\n", *inFilename, err)
+			os.Exit(1)
+		}
+		inputJson = inBytes
+	} else {
+		inBytes, err := ioutil.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read from stdin, error: %s\n", err)
+			os.Exit(1)
+		}
+		inputJson = inBytes
 	}
+
 	var scrapeReq ScrapeRequest
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&scrapeReq)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if err := json.Unmarshal(inputJson, &scrapeReq); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to parse input as json request, error: %s\n", err)
+		os.Exit(1)
 	}
 
 	if err := validate(&scrapeReq); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		fmt.Fprintf(os.Stderr, "Invalid scrape request: %s\n", err)
+		os.Exit(1)
 	}
 
+	// TODO: refactor to return obj and error then print out obj as json if non err
+	results, err := scrape(scrapeReq, *doVerbose)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error while scraping: %s\n", err)
+		os.Exit(1)
+	}
+
+	if j, err := json.MarshalIndent(results, "", "    "); err == nil {
+		fmt.Fprintln(os.Stdout, string(j))
+		os.Exit(0)
+	} else {
+		fmt.Fprintf(os.Stderr, "failed to marshal results as json, error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func scrape(req ScrapeRequest, verbose bool) (ScrapeResult, error) {
 	c := colly.NewCollector()
 	results := make(map[string]interface{})
 
 	c.OnRequest(func(r *colly.Request) {
-		log.Println("Scraping", r.URL.String())
+		if verbose {
+			log.Println("Scraping", r.URL.String())
+		}
 	})
 
-	for itemName, item := range scrapeReq.Items {
+	for itemName, item := range req.Items {
 		c.OnHTML(item.Selector, func(e *colly.HTMLElement) {
 			parsed := parseFields(item.Fields, e)
 			accumValue(results, itemName, parsed)
@@ -74,24 +105,24 @@ func scrape(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	c.OnScraped(func(r *colly.Response) {
-		log.Println("Finished", r.Request.URL)
+		if verbose {
+			log.Println("Finished", r.Request.URL)
+		}
 		wg.Done()
 	})
 	c.OnError(func(_ *colly.Response, err error) {
-		log.Println("Something went wrong:", err)
+		if verbose {
+			log.Println("Something went wrong:", err)
+		}
+		// TODO: communicate error back via channel? change from wait group to err channel?
 		wg.Done()
 	})
 
-	c.Visit(scrapeReq.Url)
+	c.Visit(req.Url)
 	wg.Wait()
 
-	if j, err := json.MarshalIndent(results, "", "    "); err == nil {
-		io.WriteString(w, string(j))
-	} else {
-		log.Printf("ERROR: failed to marshal json, err: %v\n", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// TODO: error channel instead of waitgroup and return error here if c.OnError?
+	return results, nil
 }
 
 func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string]interface{} {
@@ -118,6 +149,7 @@ func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string
 			val := parseFields(nestedFields, e)
 			accumValue(parsed, fieldName, val)
 		} else {
+			// TODO: if verbose? or trickle back to calling code? or place __gluestick_errors in results?
 			log.Printf("ERROR: expected string or map[string]interface{}, got: %s\n", reflect.TypeOf(field))
 		}
 	}
@@ -148,22 +180,20 @@ func getSelectorAndAttr(input string) (string, string) {
 		// selector only--no "|attr" specified
 		return input, ""
 	}
-	// TODO: handle trailing | ?
-	// TODO: handle when both are blank? or calling code already has a meaning for this
 	return input[:idx], input[idx+1:]
 }
 
-func validate(s *ScrapeRequest) error {
-	if s == nil {
+func validate(req *ScrapeRequest) error {
+	if req == nil {
 		return errors.New("request was nil")
 	}
-	if _, uErr := url.Parse(s.Url); uErr != nil {
+	if _, uErr := url.Parse(req.Url); uErr != nil {
 		return uErr
 	}
-	if len(s.Items) == 0 {
+	if len(req.Items) == 0 {
 		return errors.New("request.items was empty")
 	}
-	for itemK, itemV := range s.Items {
+	for itemK, itemV := range req.Items {
 		if len(itemV.Selector) == 0 {
 			return fmt.Errorf("request.items[%q].selector was empty", itemK)
 		}
