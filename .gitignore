@@ -16,6 +16,6 @@ gluestick
 # vendor/
 
 # Test/dev input and output files
-example.json
+example*.json
 foo.json
 

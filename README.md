@@ -7,17 +7,12 @@ gluing the web together
 go fmt ./... && go vet ./... && go build gluestick.go
 ```
 
-Then run via `./gluestick`
+Then run via `./gluestick -h`
 
 ## Usage
 
-# TODO: update README with cmdline usage, replaces below server hosted stuff:
-
-
-## Sample Scrape Requests
-
 ```
-curl -v "http://localhost:6100/scrape" --data '
+./gluestick -in '
 {
     "url": "https://thedrive.com/the-war-zone",
     "items": {
@@ -78,6 +73,8 @@ Which gets you:
 
 
 ## Scrape Request Format
+Either via `stdin`, `-in "{ ... }"` or `-f ./path/to/some.json`:
+
 ```
 {
     "url": "http://example.com",
