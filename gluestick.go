@@ -11,7 +11,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/gocolly/colly"
 )
@@ -93,34 +92,31 @@ func scrape(req ScrapeRequest, verbose bool) (ScrapeResult, error) {
 	})
 
 	for itemName, item := range req.Items {
-		c.OnHTML(item.Selector, func(e *colly.HTMLElement) {
-			parsed := parseFields(item.Fields, e)
-			accumValue(results, itemName, parsed)
-		})
-
+		// NOTE: have to capture itemName, item else will only get last in loop:
+		func(name string, i ScrapeItem) {
+			c.OnHTML(i.Selector, func(e *colly.HTMLElement) {
+				parsed := parseFields(i.Fields, e)
+				accumValue(results, name, parsed)
+			})
+		}(itemName, item)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	scrapeError := make(chan error, 1)
 	c.OnScraped(func(r *colly.Response) {
 		if verbose {
 			log.Println("Finished", r.Request.URL)
 		}
-		wg.Done()
+		close(scrapeError)
 	})
 	c.OnError(func(_ *colly.Response, err error) {
 		if verbose {
 			log.Println("Something went wrong:", err)
 		}
-		// TODO: communicate error back via channel? change from wait group to err channel?
-		wg.Done()
+		scrapeError <- err
 	})
-
 	c.Visit(req.Url)
-	wg.Wait()
-
-	// TODO: error channel instead of waitgroup and return error here if c.OnError?
-	return results, nil
+	scrapeErr := <-scrapeError
+	return results, scrapeErr
 }
 
 func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string]interface{} {
@@ -147,7 +143,6 @@ func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string
 			val := parseFields(nestedFields, e)
 			accumValue(parsed, fieldName, val)
 		} else {
-			// TODO: if verbose? or trickle back to calling code? or place __gluestick_errors in results?
 			log.Printf("ERROR: expected string or map[string]interface{}, got: %s\n", reflect.TypeOf(field))
 		}
 	}
