@@ -173,9 +173,9 @@ func getSelectorAndAttr(input string) (string, string) {
 	idx := strings.LastIndex(input, "|")
 	if idx == -1 {
 		// selector only--no "|attr" specified
-		return input, ""
+		return strings.TrimSpace(input), ""
 	}
-	return input[:idx], input[idx+1:]
+	return strings.TrimSpace(input[:idx]), strings.TrimSpace(input[idx+1:])
 }
 
 func validate(req *ScrapeRequest) error {
