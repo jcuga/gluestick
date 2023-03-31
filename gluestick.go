@@ -132,7 +132,9 @@ func parseFields(fields map[string]interface{}, e *colly.HTMLElement) map[string
 				}
 			} else {
 				if len(attr) == 0 {
-					accumValue(parsed, fieldName, e.ChildText(sel))
+					e.ForEach(sel, func(i int, child *colly.HTMLElement) {
+						accumValue(parsed, fieldName, child.Text)
+					})
 				} else {
 					for _, val := range e.ChildAttrs(sel, attr) {
 						accumValue(parsed, fieldName, val)
